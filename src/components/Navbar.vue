@@ -1,12 +1,14 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, useRoute, RouterLink } from 'vue-router'
-import { supabase, signOut } from '@/lib/supabase'
+import { supabase, signOut, isPublisher } from '@/lib/supabase'
 
 const router = useRouter()
 const route = useRoute()
 const user = ref(null)
 const mobileOpen = ref(false)
+
+let authSubscription = null
 
 const displayName = computed(() => {
   const u = user.value
@@ -14,12 +16,18 @@ const displayName = computed(() => {
   return u.user_metadata?.nickname || u.email?.split('@')[0] || '用户'
 })
 
+const isPublisherUser = computed(() => !!(user.value && isPublisher(user.value)))
+
+const roleLabel = computed(() => {
+  if (!user.value) return ''
+  return isPublisher(user.value) ? '招聘方' : '学生'
+})
+
 const navClass = (path) => {
-  const active =
-    route.path === path || (path !== '/' && route.path.startsWith(path))
+  const active = route.path === path || (path !== '/' && route.path.startsWith(path))
   return active
-    ? 'text-brand-600 font-semibold'
-    : 'text-slate-600 hover:text-brand-600'
+    ? 'border-b-2 border-accent-400 pb-3 text-sm font-semibold text-white'
+    : 'border-b-2 border-transparent pb-3 text-sm font-medium text-white/70 transition hover:text-white'
 }
 
 const getUser = async () => {
@@ -38,49 +46,72 @@ const logout = async () => {
 
 onMounted(() => {
   getUser()
-  supabase.auth.onAuthStateChange(() => {
+  const { data } = supabase.auth.onAuthStateChange(() => {
     getUser()
   })
+  authSubscription = data.subscription
+})
+
+onUnmounted(() => {
+  authSubscription?.unsubscribe()
+  authSubscription = null
 })
 </script>
 
 <template>
   <header
-    class="sticky top-0 z-50 border-b border-slate-200/80 bg-white/85 backdrop-blur-md supports-[backdrop-filter]:bg-white/70"
+    class="sticky top-0 z-50 border-b border-navy-800 bg-navy-900 text-white shadow-nav backdrop-blur-md"
   >
-    <div class="mx-auto flex min-h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:min-h-16 sm:px-6 lg:px-8">
-      <RouterLink to="/list" class="flex shrink-0 items-center gap-2.5" @click="mobileOpen = false">
+    <div
+      class="mx-auto flex min-h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:min-h-[3.25rem] sm:gap-4 sm:px-6 lg:px-8"
+    >
+      <RouterLink
+        to="/list"
+        class="group flex shrink-0 items-center gap-2.5 rounded-lg py-1 outline-none transition hover:opacity-90"
+        @click="mobileOpen = false"
+      >
         <span
-          class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-600 to-indigo-700 text-sm font-bold text-white shadow-md shadow-brand-600/25"
+          class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-accent-500 to-accent-700 text-sm font-bold text-white shadow-lg shadow-accent-600/30"
           >校</span
         >
         <div class="leading-tight">
-          <span class="block text-base font-bold tracking-tight text-slate-900 sm:text-lg">校兼</span>
-          <span class="hidden text-[11px] font-medium text-slate-500 sm:block">大学生兼职平台</span>
+          <span class="block text-base font-bold tracking-tight text-white sm:text-lg">校兼</span>
+          <span class="hidden text-[11px] font-medium text-sky-200/90 sm:block">JobsDB 风格 · 校园兼职</span>
         </div>
       </RouterLink>
 
-      <nav class="hidden items-center gap-1 md:flex md:gap-2">
-        <RouterLink to="/list" :class="['rounded-lg px-3 py-2 text-sm transition-colors', navClass('/list')]">
-          职位大厅
-        </RouterLink>
+      <nav class="hidden h-[3.25rem] items-end gap-6 md:flex">
+        <RouterLink to="/list" :class="navClass('/list')"> 职位搜索 </RouterLink>
         <RouterLink
+          v-if="!user || isPublisherUser"
           to="/publish"
-          :class="['rounded-lg px-3 py-2 text-sm transition-colors', navClass('/publish')]"
+          :class="navClass('/publish')"
         >
           发布职位
         </RouterLink>
+        <RouterLink
+          v-else
+          to="/register?role=publisher"
+          class="border-b-2 border-transparent pb-3 text-sm font-medium text-white/70 transition hover:text-white"
+        >
+          招聘方入驻
+        </RouterLink>
       </nav>
 
-      <div class="hidden items-center gap-3 md:flex">
+      <div class="hidden items-center gap-2 md:flex md:gap-3">
         <template v-if="user">
           <span
-            class="max-w-[140px] truncate rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700"
+            class="hidden max-w-[120px] truncate rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/90 lg:inline-block lg:max-w-[140px]"
             >{{ displayName }}</span
+          >
+          <span
+            class="rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-wide"
+            :class="isPublisherUser ? 'bg-violet-400/25 text-violet-100' : 'bg-emerald-400/20 text-emerald-100'"
+            >{{ roleLabel }}</span
           >
           <button
             type="button"
-            class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+            class="rounded-lg border border-white/25 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15"
             @click="logout"
           >
             退出
@@ -89,13 +120,13 @@ onMounted(() => {
         <template v-else>
           <RouterLink
             to="/login"
-            class="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:text-brand-600"
+            class="rounded-lg border border-white/40 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
           >
-            登录
+            登入
           </RouterLink>
           <RouterLink
             to="/register"
-            class="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-brand-600/25 transition hover:bg-brand-700"
+            class="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-accent-600/30 transition hover:bg-accent-600"
           >
             免费注册
           </RouterLink>
@@ -104,8 +135,9 @@ onMounted(() => {
 
       <button
         type="button"
-        class="inline-flex items-center justify-center rounded-lg border border-slate-200 p-2 text-slate-700 md:hidden"
-        aria-label="菜单"
+        class="inline-flex items-center justify-center rounded-lg border border-white/20 bg-white/5 p-2 text-white transition hover:bg-white/10 md:hidden"
+        aria-label="打开菜单"
+        :aria-expanded="mobileOpen"
         @click="mobileOpen = !mobileOpen"
       >
         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -127,34 +159,69 @@ onMounted(() => {
       </button>
     </div>
 
-    <div
-      v-show="mobileOpen"
-      class="border-t border-slate-100 bg-white px-4 py-4 md:hidden"
+    <Transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0 -translate-y-1"
+      enter-to-class="opacity-100 translate-y-0"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100 translate-y-0"
+      leave-to-class="opacity-0 -translate-y-1"
     >
-      <nav class="flex flex-col gap-1">
-        <RouterLink to="/list" class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-800" @click="mobileOpen = false">
-          职位大厅
-        </RouterLink>
-        <RouterLink to="/publish" class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-800" @click="mobileOpen = false">
-          发布职位
-        </RouterLink>
-        <template v-if="user">
-          <span class="px-3 py-2 text-xs text-slate-500">当前：{{ displayName }}</span>
-          <button type="button" class="rounded-lg px-3 py-2.5 text-left text-sm text-red-600" @click="logout">
-            退出登录
-          </button>
-        </template>
-        <template v-else>
-          <RouterLink to="/login" class="rounded-lg px-3 py-2.5 text-sm" @click="mobileOpen = false">登录</RouterLink>
+      <div
+        v-show="mobileOpen"
+        class="border-t border-white/10 bg-navy-950 px-4 py-4 shadow-inner md:hidden"
+      >
+        <nav class="flex flex-col gap-1">
           <RouterLink
-            to="/register"
-            class="mt-1 rounded-lg bg-brand-600 py-2.5 text-center text-sm font-semibold text-white"
+            to="/list"
+            class="rounded-xl px-3 py-2.5 text-sm font-medium text-white/90 transition hover:bg-white/10"
             @click="mobileOpen = false"
           >
-            免费注册
+            职位搜索
           </RouterLink>
-        </template>
-      </nav>
-    </div>
+          <RouterLink
+            v-if="!user || isPublisherUser"
+            to="/publish"
+            class="rounded-xl px-3 py-2.5 text-sm font-medium text-white/90 transition hover:bg-white/10"
+            @click="mobileOpen = false"
+          >
+            发布职位
+          </RouterLink>
+          <RouterLink
+            v-else
+            to="/register?role=publisher"
+            class="rounded-xl px-3 py-2.5 text-sm font-medium text-white/90 transition hover:bg-white/10"
+            @click="mobileOpen = false"
+          >
+            招聘方入驻
+          </RouterLink>
+          <template v-if="user">
+            <span class="px-3 py-2 text-xs text-white/60">当前：{{ displayName }}（{{ roleLabel }}）</span>
+            <button
+              type="button"
+              class="rounded-xl px-3 py-2.5 text-left text-sm font-medium text-rose-300 transition hover:bg-white/5"
+              @click="logout"
+            >
+              退出登录
+            </button>
+          </template>
+          <template v-else>
+            <RouterLink
+              to="/login"
+              class="rounded-xl px-3 py-2.5 text-sm text-white/90 transition hover:bg-white/10"
+              @click="mobileOpen = false"
+              >登入</RouterLink
+            >
+            <RouterLink
+              to="/register"
+              class="mt-1 rounded-xl bg-accent-500 py-2.5 text-center text-sm font-semibold text-white shadow-sm transition hover:bg-accent-600"
+              @click="mobileOpen = false"
+            >
+              免费注册
+            </RouterLink>
+          </template>
+        </nav>
+      </div>
+    </Transition>
   </header>
 </template>

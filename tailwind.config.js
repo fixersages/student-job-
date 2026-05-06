@@ -4,6 +4,33 @@ export default {
   theme: {
     extend: {
       colors: {
+        /** JobsDB 风格主色：深蓝顶栏 / 标题 */
+        navy: {
+          50: '#e8eef6',
+          100: '#c9d7e8',
+          200: '#9bb4d1',
+          300: '#6789b4',
+          400: '#3d5f8f',
+          500: '#1e4778',
+          600: '#153a66',
+          700: '#0f3058',
+          800: '#0a2649',
+          900: '#002d5b',
+          950: '#001a38',
+        },
+        /** 主操作强调：品红按钮 */
+        accent: {
+          50: '#fdf2f8',
+          100: '#fce7f3',
+          200: '#fbcfe8',
+          300: '#f9a8d4',
+          400: '#f472b6',
+          500: '#ec4899',
+          600: '#db2777',
+          700: '#be185d',
+          800: '#9d174d',
+          900: '#831843',
+        },
         brand: {
           50: '#eff6ff',
           100: '#dbeafe',
@@ -16,22 +43,51 @@ export default {
           800: '#1e40af',
           900: '#1e3a8a',
         },
+        surface: {
+          DEFAULT: '#ffffff',
+          muted: '#f8fafc',
+          subtle: '#f1f5f9',
+        },
+        /** 列表区浅灰底 */
+        panel: {
+          DEFAULT: '#f4f6f9',
+          deep: '#e8ecf2',
+        },
       },
       fontFamily: {
-        sans: ['DM Sans', 'system-ui', 'sans-serif'],
+        sans: [
+          'DM Sans',
+          'Noto Sans SC',
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'Segoe UI',
+          'sans-serif',
+        ],
+      },
+      borderRadius: {
+        '4xl': '2rem',
       },
       boxShadow: {
-        card: '0 1px 3px 0 rgb(0 0 0 / 0.06), 0 12px 24px -6px rgb(15 23 42 / 0.08)',
-        'card-hover': '0 4px 6px -1px rgb(0 0 0 / 0.07), 0 20px 40px -12px rgb(37 99 235 / 0.12)',
+        card: '0 1px 2px 0 rgb(0 0 0 / 0.04), 0 8px 24px -4px rgb(15 23 42 / 0.08)',
+        'card-hover':
+          '0 4px 6px -1px rgb(0 0 0 / 0.06), 0 16px 32px -8px rgb(0 45 91 / 0.12)',
+        nav: '0 1px 0 0 rgb(0 26 56 / 0.15)',
+        'card-active': '0 0 0 3px rgb(37 99 235 / 0.35), 0 8px 24px -4px rgb(0 45 91 / 0.12)',
       },
       backgroundImage: {
         'grid-slate': `
-          linear-gradient(to right, rgb(241 245 249 / 0.85) 1px, transparent 1px),
-          linear-gradient(to bottom, rgb(241 245 249 / 0.85) 1px, transparent 1px)
+          linear-gradient(to right, rgb(226 232 240 / 0.5) 1px, transparent 1px),
+          linear-gradient(to bottom, rgb(226 232 240 / 0.5) 1px, transparent 1px)
         `,
+        'hero-detail':
+          'linear-gradient(135deg, rgb(0 45 91) 0%, rgb(30 64 175) 45%, rgb(190 24 93 / 0.35) 100%)',
       },
       backgroundSize: {
-        grid: '48px 48px',
+        grid: '40px 40px',
+      },
+      transitionDuration: {
+        DEFAULT: '200ms',
       },
     },
   },

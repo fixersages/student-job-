@@ -3,11 +3,65 @@
 @tailwind utilities;
 
 @layer base {
-  html {
-    @apply antialiased text-slate-900;
+  :root {
+    color-scheme: light;
+    --app-radius: 1rem;
+    --app-radius-lg: 1.25rem;
+    --app-ring: rgb(37 99 235 / 0.25);
   }
+
+  html {
+    @apply antialiased text-slate-900 scroll-smooth;
+  }
+
   body {
     @apply min-h-screen bg-slate-50 text-slate-800;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    @apply bg-brand-200/80 text-brand-900;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500/40 ring-offset-2 ring-offset-slate-50;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}
+
+@layer components {
+  .app-container {
+    @apply mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8;
+  }
+
+  .app-card {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card transition-shadow duration-200;
+  }
+
+  .app-card-interactive {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card transition-all duration-200;
+    @apply hover:-translate-y-0.5 hover:border-brand-200/70 hover:shadow-card-hover;
+  }
+
+  .app-input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm outline-none transition-colors duration-200;
+    @apply placeholder:text-slate-400;
+    @apply hover:border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/15;
+  }
+
+  .app-btn-primary {
+    @apply inline-flex items-center justify-center rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-brand-600/20;
+    @apply transition hover:bg-brand-700 active:scale-[0.99];
+  }
+
+  .app-btn-secondary {
+    @apply inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm;
+    @apply transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.99];
   }
 }
 

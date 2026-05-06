@@ -1,6 +1,29 @@
-node_modules
-dist
-.DS_Store
+# 依赖包，不用上传
+node_modules/
+.pnp/
+*.pnp.*
+
+# 打包产物，不用上传
+dist/
+dist-ssr/
 *.local
+
+# 环境变量文件（包含 Supabase Key，绝对不能上传！）
 .env
-.env.*
+.env.local
+.env.*.local
+
+# IDE 配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 日志文件
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
