@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { Analytics } from '@vercel/analytics/vue'
 import Navbar from '@/components/Navbar.vue'
 import SiteFooter from '@/components/SiteFooter.vue'
 import AppLoadingBar from '@/components/AppLoadingBar.vue'
@@ -11,6 +12,7 @@ const isAuthShell = computed(() => route.meta.layout === 'auth')
 
 <template>
   <div class="flex min-h-screen flex-col bg-slate-50">
+    <Analytics />
     <AppLoadingBar />
     <Navbar v-if="!isAuthShell" />
     <main class="flex-1" :class="isAuthShell ? '' : 'pb-6 pt-0 sm:pb-10'">
