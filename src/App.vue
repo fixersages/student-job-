@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { Analytics } from '@vercel/analytics/vue'
 import Navbar from '@/components/Navbar.vue'
 import SiteFooter from '@/components/SiteFooter.vue'
 import AppLoadingBar from '@/components/AppLoadingBar.vue'
@@ -21,6 +22,7 @@ const isAuthShell = computed(() => route.meta.layout === 'auth')
       </router-view>
     </main>
     <SiteFooter v-if="!isAuthShell" />
+    <Analytics />
   </div>
 </template>
 
