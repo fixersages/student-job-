@@ -1,9 +1,13 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, defineAsyncComponent } from 'vue'
 import { useRouter, useRoute, RouterLink } from 'vue-router'
-import { supabase, getCategoryList, getCurrentUser, isPublisher } from '@/lib/supabase'
-import AppEmptyState from '@/components/AppEmptyState.vue'
+import { getCategoryList, getCurrentUser, isPublisher } from '@/lib/supabase'
+import { fetchJobsPage, deleteJobById, getJobDetail } from '@/api/job'
 import { resolveJobBanner } from '@/utils/jobBanner'
+import { workArrangementLabel } from '@/utils/workArrangement'
+import UserAvatar from '@/components/UserAvatar.vue'
+
+const AppEmptyState = defineAsyncComponent(() => import('@/components/AppEmptyState.vue'))
 
 const router = useRouter()
 const route = useRoute()
@@ -15,9 +19,23 @@ const loginUserId = ref('')
 const loginUser = ref(null)
 const keyword = ref('')
 const locationQ = ref('')
+/** 点击「寻找」后参与服务端查询，避免输入每个字都打接口 */
+const appliedKeyword = ref('')
+const appliedLocation = ref('')
 const loading = ref(true)
+const loadingMore = ref(false)
 const loadError = ref('')
 const showForbiddenPublish = ref(false)
+
+const PAGE_SIZE = 10
+const currentPage = ref(0)
+const hasMore = ref(true)
+const totalCount = ref(null)
+const listScrollRoot = ref(null)
+const loadMoreSentinel = ref(null)
+let loadMoreObserver = null
+/** 防止滚动哨兵在同一帧内重复触发「加载更多」 */
+let loadMoreLock = false
 
 /** 薪资筛选：全部 | 仅面议 | 已写薪资 */
 const salaryFilter = ref('all')
@@ -34,12 +52,14 @@ function updateMq() {
 const selectedJobId = ref(null)
 const detailInfo = ref(null)
 const detailLoading = ref(false)
+/** 防止快速切换职位时旧详情请求覆盖新内容 */
+let fetchDetailSeq = 0
 
 const canPublish = computed(() => !loginUser.value || isPublisher(loginUser.value))
 
 function goPublish() {
-  if (canPublish.value) router.push('/publish')
-  else router.push('/register?role=publisher')
+  if (canPublish.value) void router.push('/publish')
+  else void router.push('/register?role=publisher')
 }
 
 watch(
@@ -57,54 +77,11 @@ watch(
 
 const isMine = (uid) => uid === loginUserId.value
 
-const textBlob = (j) =>
-  `${j.title || ''} ${j.address || ''} ${j.content || ''} ${j.work_time || ''}`.toLowerCase()
-
-const displayJobs = computed(() => {
-  let list = [...jobList.value]
-  const kw = keyword.value.trim().toLowerCase()
-  const loc = locationQ.value.trim().toLowerCase()
-  if (kw) {
-    list = list.filter(
-      (j) =>
-        j.title?.toLowerCase().includes(kw) ||
-        j.address?.toLowerCase().includes(kw) ||
-        j.nickname?.toLowerCase().includes(kw) ||
-        j.content?.toLowerCase().includes(kw),
-    )
-  }
-  if (loc) {
-    list = list.filter((j) => j.address?.toLowerCase().includes(loc))
-  }
-  if (salaryFilter.value === 'negotiable') {
-    list = list.filter((j) => !j.price || String(j.price).includes('面议'))
-  }
-  if (salaryFilter.value === 'specified') {
-    list = list.filter((j) => j.price && !String(j.price).includes('面议'))
-  }
-  if (workMode.value === 'remote') {
-    list = list.filter((j) => {
-      const t = textBlob(j)
-      return t.includes('远程') || t.includes('线上') || t.includes('在家')
-    })
-  }
-  if (workMode.value === 'onsite') {
-    list = list.filter((j) => {
-      const t = textBlob(j)
-      return !t.includes('远程') && !t.includes('线上') && !t.includes('在家')
-    })
-  }
-  if (sortOrder.value === 'title') {
-    list.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh-CN'))
-  } else {
-    list.sort((a, b) => {
-      const ta = new Date(a.created_at).getTime()
-      const tb = new Date(b.created_at).getTime()
-      return sortOrder.value === 'new' ? tb - ta : ta - tb
-    })
-  }
-  return list
-})
+/** 大厅列表/分栏详情：发布者公开头像 URL（来自 campus_public_profiles） */
+function publisherAvatarUrlFromJob(job) {
+  const u = job?.publisher_public?.avatar_url
+  return u != null && String(u).trim() && /^https?:\/\//i.test(String(u).trim()) ? String(u).trim() : ''
+}
 
 const detailBannerUrl = computed(() => resolveJobBanner(detailInfo.value))
 
@@ -112,71 +89,154 @@ const hasActiveFilters = computed(
   () =>
     Boolean(keyword.value.trim()) ||
     Boolean(locationQ.value.trim()) ||
+    Boolean(appliedKeyword.value.trim()) ||
+    Boolean(appliedLocation.value.trim()) ||
     salaryFilter.value !== 'all' ||
     workMode.value !== 'all',
 )
 
-function runSearch() {
+async function runSearch() {
+  appliedKeyword.value = keyword.value
+  appliedLocation.value = locationQ.value
+  /** 简化模式：关键词/地点不参与服务端筛选；仅刷新列表并滚动到列表区域 */
+  await loadJobs(false)
   const el = document.getElementById('job-split')
   el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  if (isDesktop.value && displayJobs.value.length) {
-    selectJob(displayJobs.value[0], { syncUrl: true })
+  await nextTick()
+  if (isDesktop.value && jobList.value.length) {
+    selectJob(jobList.value[0], { syncUrl: true })
   }
 }
 
 function clearClientFilters() {
   keyword.value = ''
   locationQ.value = ''
+  appliedKeyword.value = ''
+  appliedLocation.value = ''
   salaryFilter.value = 'all'
   workMode.value = 'all'
 }
 
-const changeCategory = async (id) => {
+const changeCategory = (id) => {
   cateId.value = id
-  await getJobList()
+  /** 简化模式：分类仅作展示，不触发列表重新请求 */
 }
 
-const getJobList = async () => {
-  loading.value = true
-  loadError.value = ''
-  let query = supabase
-    .from('part_time')
-    .select('*, job_category(name)')
-    .order('created_at', { ascending: false })
-
-  if (cateId.value !== 0) {
-    query = query.eq('category_id', cateId.value)
+/**
+ * @param {boolean} append 为 true 时追加下一页（滚动加载）；false 时重置列表
+ */
+async function loadJobs(append) {
+  if (append) {
+    if (!hasMore.value || loadingMore.value || loading.value) return
+    loadingMore.value = true
+  } else {
+    loading.value = true
+    currentPage.value = 0
+    jobList.value = []
+    hasMore.value = true
+    totalCount.value = null
   }
+  loadError.value = ''
 
-  const { data, error } = await query
-  loading.value = false
+  const page = append ? currentPage.value : 0
+  const { data, error, count } = await fetchJobsPage({
+    page,
+    pageSize: PAGE_SIZE,
+    sort: sortOrder.value,
+  })
+
+  if (append) loadingMore.value = false
+  else loading.value = false
+
   if (error) {
     loadError.value = error.message || '加载失败，请稍后再试'
     console.error(error)
     return
   }
-  jobList.value = data ?? []
-  syncSelectionAfterLoad()
+
+  const rows = data ?? []
+  if (append) {
+    const seen = new Set(jobList.value.map((j) => String(j.id)))
+    for (const r of rows) {
+      const sid = String(r.id)
+      if (!seen.has(sid)) {
+        jobList.value.push(r)
+        seen.add(sid)
+      }
+    }
+  } else {
+    jobList.value = rows
+  }
+
+  if (typeof count === 'number') {
+    totalCount.value = count
+    hasMore.value = jobList.value.length < count
+  } else {
+    hasMore.value = rows.length >= PAGE_SIZE
+  }
+  if (rows.length === 0 && append) hasMore.value = false
+
+  currentPage.value = page + 1
+  if (!append) {
+    await syncSelectionAfterLoad()
+  }
+  await nextTick()
+  setupLoadMoreObserver()
+}
+
+async function loadMoreJobs() {
+  if (loadMoreLock) return
+  if (loading.value || loadingMore.value || !hasMore.value || loadError.value) return
+  loadMoreLock = true
+  try {
+    await loadJobs(true)
+  } finally {
+    loadMoreLock = false
+  }
+}
+
+function setupLoadMoreObserver() {
+  loadMoreObserver?.disconnect()
+  loadMoreObserver = null
+  const root = listScrollRoot.value
+  const target = loadMoreSentinel.value
+  if (!root || !target || typeof IntersectionObserver === 'undefined') return
+  loadMoreObserver = new IntersectionObserver(
+    (entries) => {
+      if (!entries[0]?.isIntersecting) return
+      if (loading.value || loadingMore.value || !hasMore.value || loadError.value || loadMoreLock) return
+      void loadMoreJobs()
+    },
+    { root, rootMargin: '100px', threshold: 0 },
+  )
+  loadMoreObserver.observe(target)
 }
 
 async function fetchDetail(id) {
   if (!id) {
     detailInfo.value = null
+    detailLoading.value = false
     return
   }
+  const seq = ++fetchDetailSeq
   detailLoading.value = true
   detailInfo.value = null
-  const { data, error } = await supabase
-    .from('part_time')
-    .select('*, job_category(name)')
-    .eq('id', id)
-    .single()
-  detailLoading.value = false
-  if (error || !data) {
-    detailInfo.value = null
-    return
+  try {
+    const { data, error } = await getJobDetail(id)
+    if (seq !== fetchDetailSeq) return
+    if (error || !data) {
+      detailInfo.value = null
+      return
+    }
+    detailInfo.value = data
+    /** 与右侧预览同源：更新左侧列表中对应卡片（编辑返回后列表接口与详情略差时也能对齐） */
+    const idx = jobList.value.findIndex((x) => String(x.id) === String(id))
+    if (idx >= 0) {
+      jobList.value.splice(idx, 1, data)
+    }
+  } finally {
+    if (seq === fetchDetailSeq) detailLoading.value = false
   }
-  detailInfo.value = data
 }
 
 function mergeQuery(partial) {
@@ -189,7 +249,7 @@ function mergeQuery(partial) {
 
 async function selectJob(job, { syncUrl = true } = {}) {
   if (!isDesktop.value) {
-    router.push(`/detail/${job.id}`)
+    void router.push(`/detail/${job.id}`)
     return
   }
   selectedJobId.value = String(job.id)
@@ -200,23 +260,24 @@ async function selectJob(job, { syncUrl = true } = {}) {
 }
 
 function syncSelectionAfterLoad() {
-  if (!isDesktop.value) return
-  const jobs = displayJobs.value
+  if (!isDesktop.value) return Promise.resolve()
+  const jobs = jobList.value
   if (!jobs.length) {
     selectedJobId.value = null
     detailInfo.value = null
-    const q = { ...route.query }
-    delete q.job
-    router.replace({ query: q })
-    return
+    if (route.query.job != null && String(route.query.job) !== '') {
+      const q = { ...route.query }
+      delete q.job
+      router.replace({ query: q })
+    }
+    return Promise.resolve()
   }
   const fromUrl = route.query.job
   if (fromUrl && jobs.some((j) => String(j.id) === String(fromUrl))) {
     selectedJobId.value = String(fromUrl)
-    fetchDetail(fromUrl)
-    return
+    return fetchDetail(fromUrl)
   }
-  selectJob(jobs[0], { syncUrl: true })
+  return selectJob(jobs[0], { syncUrl: true })
 }
 
 watch(
@@ -224,37 +285,21 @@ watch(
   (job) => {
     if (!isDesktop.value || loading.value) return
     if (!job) {
-      syncSelectionAfterLoad()
+      void syncSelectionAfterLoad()
       return
     }
-    if (String(selectedJobId.value) === String(job)) return
-    const j = displayJobs.value.find((x) => String(x.id) === String(job))
+    const j = jobList.value.find((x) => String(x.id) === String(job))
     if (j) {
       selectedJobId.value = String(job)
-      fetchDetail(job)
+      void fetchDetail(job)
     }
   },
 )
 
-watch([salaryFilter, workMode, sortOrder, keyword, locationQ], () => {
-  if (!isDesktop.value || loading.value) return
-  nextTick(() => {
-    if (!displayJobs.value.length) {
-      selectedJobId.value = null
-      detailInfo.value = null
-      return
-    }
-    const still = displayJobs.value.some((j) => String(j.id) === String(selectedJobId.value))
-    if (!still) {
-      selectJob(displayJobs.value[0], { syncUrl: true })
-    }
-  })
-})
-
 const delJob = async (id) => {
   if (!confirm('确定删除这条兼职？')) return
 
-  const { error } = await supabase.from('part_time').delete().eq('id', id)
+  const { error } = await deleteJobById(id)
 
   if (error) {
     alert('删除失败')
@@ -263,7 +308,7 @@ const delJob = async (id) => {
       selectedJobId.value = null
       detailInfo.value = null
     }
-    getJobList()
+    await loadJobs(false)
   }
 }
 
@@ -287,10 +332,10 @@ const formatRelative = (timeStr) => {
   return formatTime(timeStr)
 }
 
-function clearFilters() {
+async function clearFilters() {
   clearClientFilters()
   cateId.value = 0
-  getJobList()
+  await loadJobs(false)
 }
 
 const telHref = (phone) => {
@@ -298,50 +343,90 @@ const telHref = (phone) => {
   return `tel:${String(phone).replace(/\s/g, '')}`
 }
 
+watch(sortOrder, () => {
+  void loadJobs(false)
+})
+
+let stopListAfterEach = null
+
 onMounted(async () => {
   updateMq()
   window.addEventListener('resize', updateMq)
 
-  const user = await getCurrentUser()
-  if (user) {
-    loginUserId.value = user.id
-    loginUser.value = user
-  }
+  stopListAfterEach = router.afterEach((to, from) => {
+    if (to.name !== 'job-list' || !isDesktop.value) return
+    const prev = from?.name
+    if (prev !== 'job-edit' && prev !== 'job-detail') return
+    const rid = from?.params?.id
+    if (rid == null || String(rid).trim() === '') return
+    void (async () => {
+      const { data, error } = await getJobDetail(rid)
+      if (error || !data) return
+      const sid = String(rid)
+      const idx = jobList.value.findIndex((x) => String(x.id) === sid)
+      if (idx >= 0) {
+        jobList.value.splice(idx, 1, data)
+      }
+      if (String(selectedJobId.value) === sid) {
+        detailInfo.value = data
+      }
+    })()
+  })
 
-  const { data } = await getCategoryList()
-  categoryList.value = data ?? []
+  await loadJobs(false)
 
-  await getJobList()
+  queueMicrotask(() => {
+    void getCurrentUser().then((user) => {
+      if (user) {
+        loginUserId.value = user.id
+        loginUser.value = user
+      }
+    })
+  })
+
+  const runIdle = typeof requestIdleCallback === 'function' ? requestIdleCallback : (cb) => setTimeout(cb, 1)
+  runIdle(() => {
+    void getCategoryList().then((catRes) => {
+      categoryList.value = catRes.data ?? []
+    })
+  })
 })
 
 watch(isDesktop, (wide) => {
-  if (wide) nextTick(() => syncSelectionAfterLoad())
+  if (wide) nextTick(() => void syncSelectionAfterLoad())
 })
 
 onUnmounted(() => {
+  stopListAfterEach?.()
+  stopListAfterEach = null
   window.removeEventListener('resize', updateMq)
+  loadMoreObserver?.disconnect()
+  loadMoreObserver = null
 })
 </script>
 
 <template>
-  <div class="min-h-screen bg-panel pb-10">
-    <!-- JobsDB 风格：深蓝搜索区 -->
-    <section class="relative bg-navy-900 pb-5 pt-6 text-white shadow-lg lg:pt-8">
+  <div class="min-h-screen bg-slate-100/90 pb-10 sm:pb-12">
+    <section
+      class="relative overflow-hidden border-b border-slate-900/15 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 pb-6 pt-7 text-white shadow-sm sm:pb-7 sm:pt-8 lg:pb-9 lg:pt-10"
+    >
       <div
-        class="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_100%_0%,rgb(236_72_153/0.18),transparent)]"
+        class="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_100%_90%_at_70%_-30%,rgb(59_130_246/0.14),transparent_55%)]"
       />
       <div class="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/90">职位搜索</p>
-        <h1 class="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">找到适合你的校园兼职</h1>
-        <p class="mt-2 max-w-2xl text-sm text-white/70 sm:text-base">
-          关键词 + 地点双栏搜索；下方筛选真实过滤列表。宽屏左侧选岗、右侧即时预览详情。
+        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">职位大厅</p>
+        <h1 class="mt-2 text-balance text-2xl font-bold tracking-tight text-white sm:text-3xl lg:text-[1.75rem]">
+          找到适合你的校园兼职
+        </h1>
+        <p class="mt-3 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-[0.9375rem]">
+          在招岗位按发布时间展示；支持分栏预览与移动端详情。下方筛选项为界面预留，当前版本不参与过滤。
         </p>
 
-        <div class="mt-6 flex flex-col gap-3 lg:flex-row lg:items-stretch">
-          <div class="flex flex-1 flex-col gap-3 sm:flex-row">
-            <div class="relative min-h-[3rem] flex-1">
-              <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-navy-400">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div class="mt-7 flex flex-col gap-3 lg:mt-8 lg:flex-row lg:items-stretch lg:gap-4">
+          <div class="flex flex-1 flex-col gap-3 sm:flex-row sm:gap-3">
+            <div class="relative min-h-[2.875rem] flex-1">
+              <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
+                <svg class="h-[1.125rem] w-[1.125rem]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -353,14 +438,14 @@ onUnmounted(() => {
               <input
                 v-model="keyword"
                 type="search"
-                placeholder="职位、公司关键词…"
-                class="h-full min-h-[3rem] w-full rounded-xl border-0 bg-white pl-11 pr-4 text-navy-900 shadow-md placeholder:text-slate-400 focus:ring-2 focus:ring-accent-400"
+                placeholder="职位、关键词…"
+                class="app-hero-field pl-10"
                 @keydown.enter.prevent="runSearch"
               />
             </div>
-            <div class="relative min-h-[3rem] flex-1">
-              <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-navy-400">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="relative min-h-[2.875rem] flex-1">
+              <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
+                <svg class="h-[1.125rem] w-[1.125rem]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -378,40 +463,38 @@ onUnmounted(() => {
               <input
                 v-model="locationQ"
                 type="text"
-                placeholder="城市、校区或地区…"
-                class="h-full min-h-[3rem] w-full rounded-xl border-0 bg-white pl-11 pr-4 text-navy-900 shadow-md placeholder:text-slate-400 focus:ring-2 focus:ring-accent-400"
+                placeholder="城市、校区…"
+                class="app-hero-field pl-10"
                 @keydown.enter.prevent="runSearch"
               />
             </div>
           </div>
-          <div class="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col lg:justify-stretch xl:flex-row">
+          <div class="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col lg:justify-stretch xl:flex-row xl:items-stretch">
             <button
               type="button"
-              class="inline-flex min-h-[3rem] items-center justify-center rounded-xl bg-accent-500 px-8 text-sm font-bold text-white shadow-lg shadow-accent-600/35 transition hover:bg-accent-600 active:scale-[0.99] lg:min-w-[7.5rem]"
+              class="inline-flex min-h-[2.875rem] items-center justify-center rounded-[var(--app-radius)] bg-brand-600 px-7 text-sm font-semibold text-white shadow-md shadow-black/25 transition duration-200 hover:bg-brand-500 active:scale-[0.99] lg:min-w-[6.5rem]"
               @click="runSearch"
             >
-              寻找
+              搜索
             </button>
             <button
               type="button"
-              class="inline-flex min-h-[3rem] items-center justify-center rounded-xl border border-white/30 bg-white/10 px-5 text-sm font-semibold text-white transition hover:bg-white/20"
+              class="inline-flex min-h-[2.875rem] items-center justify-center rounded-[var(--app-radius)] border border-white/20 bg-white/5 px-5 text-sm font-semibold text-white transition duration-200 hover:border-white/30 hover:bg-white/10 active:scale-[0.99]"
               @click="goPublish"
             >
-              {{ canPublish ? '发布职位' : '招聘方' }}
+              {{ canPublish ? '发布职位' : '招聘方入驻' }}
             </button>
           </div>
         </div>
 
-        <!-- 分类胶囊（服务端筛选） -->
-        <div class="mt-5 flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <!-- 分类胶囊（展示用，当前不参与列表过滤） -->
+        <div
+          class="mt-6 flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
           <button
             type="button"
-            class="shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition"
-            :class="
-              cateId === 0
-                ? 'border-accent-400 bg-accent-500 text-white shadow-md'
-                : 'border-white/25 bg-white/5 text-white/90 hover:bg-white/10'
-            "
+            class="shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition duration-200"
+            :class="cateId === 0 ? 'app-hero-chip-active border-transparent' : 'app-hero-chip'"
             @click="changeCategory(0)"
           >
             全部分类
@@ -419,54 +502,46 @@ onUnmounted(() => {
           <button
             v-for="item in categoryList"
             :key="item.id"
+            v-memo="[item.id, item.name, cateId]"
             type="button"
-            class="shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition"
-            :class="
-              cateId === item.id
-                ? 'border-accent-400 bg-accent-500 text-white shadow-md'
-                : 'border-white/25 bg-white/5 text-white/90 hover:bg-white/10'
-            "
+            class="shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition duration-200"
+            :class="cateId === item.id ? 'app-hero-chip-active border-transparent' : 'app-hero-chip'"
             @click="changeCategory(item.id)"
           >
             {{ item.name }}
           </button>
         </div>
 
-        <!-- 客户端筛选条 -->
-        <div class="mt-4 flex flex-wrap gap-2 border-t border-white/10 pt-4">
-          <span class="mr-1 w-full text-[11px] font-semibold uppercase tracking-wide text-white/50 lg:w-auto lg:self-center">筛选</span>
+        <!-- 筛选区（展示用，当前不参与列表过滤） -->
+        <div class="mt-5 flex flex-wrap gap-2 border-t border-white/10 pt-5">
+          <span
+            class="mr-1 w-full text-[10px] font-semibold uppercase tracking-wider text-slate-500 lg:w-auto lg:self-center"
+            >筛选</span
+          >
           <button
             v-for="opt in [
-              { k: 'all', l: '薪资：全部' },
-              { k: 'negotiable', l: '面议为主' },
-              { k: 'specified', l: '已写薪资' },
+              { k: 'all', l: '薪资不限' },
+              { k: 'negotiable', l: '面议 / 未写' },
+              { k: 'specified', l: '已写金额' },
             ]"
             :key="opt.k"
             type="button"
-            class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
-            :class="
-              salaryFilter === opt.k
-                ? 'border-amber-300 bg-amber-400/90 text-navy-950'
-                : 'border-white/20 bg-navy-800/80 text-white/85 hover:bg-navy-800'
-            "
+            class="rounded-full border px-3 py-1.5 text-xs font-medium transition duration-200"
+            :class="salaryFilter === opt.k ? 'app-hero-chip-active border-transparent' : 'app-hero-chip py-1.5'"
             @click="salaryFilter = opt.k"
           >
             {{ opt.l }}
           </button>
           <button
             v-for="opt in [
-              { k: 'all', l: '工作方式：全部' },
-              { k: 'remote', l: '可远程/线上' },
-              { k: 'onsite', l: '到岗为主' },
+              { k: 'all', l: '地点形式不限' },
+              { k: 'remote', l: '可远程 / 线上' },
+              { k: 'onsite', l: '以到岗为主' },
             ]"
             :key="'w-' + opt.k"
             type="button"
-            class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
-            :class="
-              workMode === opt.k
-                ? 'border-cyan-300 bg-cyan-400/90 text-navy-950'
-                : 'border-white/20 bg-navy-800/80 text-white/85 hover:bg-navy-800'
-            "
+            class="rounded-full border px-3 py-1.5 text-xs font-medium transition duration-200"
+            :class="workMode === opt.k ? 'app-hero-chip-active border-transparent' : 'app-hero-chip py-1.5'"
             @click="workMode = opt.k"
           >
             {{ opt.l }}
@@ -474,19 +549,19 @@ onUnmounted(() => {
           <button
             v-if="hasActiveFilters || cateId !== 0"
             type="button"
-            class="rounded-full border border-white/30 px-3 py-1.5 text-xs font-medium text-white/90 hover:bg-white/10"
+            class="rounded-full border border-white/20 px-3 py-1.5 text-xs font-medium text-slate-200 transition duration-200 hover:bg-white/10"
             @click="clearFilters"
           >
-            清除全部条件
+            清除条件
           </button>
         </div>
       </div>
     </section>
 
-    <div class="mx-auto max-w-7xl px-4 pt-4 sm:px-6 lg:px-8">
+    <div class="mx-auto max-w-7xl px-4 pt-5 sm:px-6 sm:pt-6 lg:px-8">
       <div
         v-if="showForbiddenPublish"
-        class="mb-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between"
+        class="mb-4 flex flex-col gap-3 rounded-[var(--app-radius-lg)] border border-amber-200/90 bg-amber-50/95 px-4 py-3.5 text-sm text-amber-950 shadow-sm sm:flex-row sm:items-center sm:justify-between"
         role="status"
       >
         <p>
@@ -499,32 +574,43 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <p class="mb-3 text-center text-xs text-slate-500 lg:hidden">↓ 点击卡片查看完整详情页</p>
+      <p class="mb-4 text-center text-xs text-slate-500 lg:hidden">轻触卡片查看完整职位详情</p>
 
       <div
-        v-if="loading || displayJobs.length"
+        v-if="loading || jobList.length"
         id="job-split"
-        class="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-card lg:flex lg:min-h-[calc(100dvh-13rem)]"
+        class="overflow-hidden rounded-[var(--app-radius-xl)] border border-slate-200/90 bg-white shadow-card ring-1 ring-slate-900/[0.03] lg:flex lg:min-h-[calc(100dvh-12.5rem)]"
       >
         <!-- 左侧列表 -->
         <aside
-          class="flex flex-col border-slate-200 lg:w-[38%] lg:min-w-[300px] lg:max-w-[440px] lg:border-r lg:bg-white"
+          class="flex flex-col border-slate-200/90 lg:w-[38%] lg:min-w-[300px] lg:max-w-[440px] lg:border-r lg:bg-slate-50/40"
         >
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/95 px-3 py-3">
+          <div
+            class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-3 py-3 sm:px-4"
+          >
             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               <span
-                class="inline-flex items-center rounded-full bg-navy-900 px-3 py-1 text-xs font-bold text-white tabular-nums"
+                class="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white tabular-nums shadow-sm"
               >
-                {{ displayJobs.length }} 个岗位
+                <template v-if="totalCount != null && totalCount > jobList.length">
+                  {{ jobList.length }} / {{ totalCount }} 条（已加载 / 共）
+                </template>
+                <template v-else> {{ jobList.length }} 个岗位 </template>
               </span>
-              <span v-if="hasActiveFilters" class="text-[11px] font-medium text-accent-600">已筛选</span>
+              <span
+                v-if="totalCount != null && totalCount > jobList.length"
+                class="max-w-[14rem] text-[10px] leading-snug text-slate-500 lg:max-w-none"
+                >上拉或点击加载更多获取其余岗位。</span
+              >
             </div>
             <div class="flex shrink-0 items-center gap-2">
-              <label for="job-sort-select" class="text-[11px] font-semibold text-slate-500">排序</label>
+              <label for="job-sort-select" class="text-[10px] font-semibold uppercase tracking-wide text-slate-500"
+                >排序</label
+              >
               <select
                 id="job-sort-select"
                 v-model="sortOrder"
-                class="max-w-[10.5rem] cursor-pointer rounded-lg border border-slate-200 bg-white py-1.5 pl-2 pr-8 text-xs font-medium text-navy-900 shadow-sm outline-none transition hover:border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20"
+                class="max-w-[10.5rem] cursor-pointer rounded-md border border-slate-200 bg-white py-1.5 pl-2.5 pr-7 text-xs font-medium text-slate-800 shadow-sm outline-none transition duration-200 hover:border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/15"
               >
                 <option value="new">最新优先</option>
                 <option value="old">最早发布</option>
@@ -533,33 +619,61 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div v-if="loadError" class="border-b border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <div v-if="loadError" class="border-b border-red-100 bg-red-50/90 px-3 py-2.5 text-xs text-red-900 sm:px-4">
             {{ loadError }}
-            <button type="button" class="ml-2 font-semibold underline" @click="getJobList">重试</button>
+            <button
+              type="button"
+              class="ml-2 font-semibold text-red-800 underline decoration-red-300 underline-offset-2 transition hover:text-red-950"
+              @click="loadJobs(false)"
+              >重试</button
+            >
           </div>
 
-          <div class="flex-1 space-y-2 overflow-y-auto overscroll-contain p-2 lg:max-h-[calc(100dvh-13rem)]">
+          <div
+            ref="listScrollRoot"
+            class="flex-1 space-y-2 overflow-y-auto overscroll-contain p-2.5 sm:p-3 lg:max-h-[calc(100dvh-12.5rem)]"
+          >
             <template v-if="loading">
-              <div v-for="n in 5" :key="n" class="h-28 animate-pulse rounded-xl bg-slate-100" />
+              <div
+                v-for="n in 5"
+                :key="n"
+                class="h-28 animate-pulse rounded-[var(--app-radius-lg)] bg-slate-200/60"
+              />
             </template>
             <template v-else>
               <button
-                v-for="item in displayJobs"
+                v-for="item in jobList"
                 :key="item.id"
+                v-memo="[
+                  item.id,
+                  item.title,
+                  item.created_at,
+                  item.price,
+                  item.work_time,
+                  item.address,
+                  item.content,
+                  item.work_arrangement,
+                  item.user_id,
+                  item.nickname,
+                  item.job_category?.name,
+                  item.publisher_public?.avatar_url,
+                  selectedJobId,
+                  isDesktop,
+                ]"
                 type="button"
-                class="w-full rounded-xl border bg-white p-4 text-left transition duration-200"
-                :class="
-                  isDesktop && String(selectedJobId) === String(item.id)
-                    ? 'border-navy-600 shadow-card-active ring-1 ring-brand-500/30'
-                    : 'border-slate-200/90 hover:border-slate-300 hover:shadow-md'
-                "
+                class="app-job-row group"
+                :class="isDesktop && String(selectedJobId) === String(item.id) ? 'app-job-row-selected' : ''"
                 @click="selectJob(item)"
               >
-                <div class="flex gap-3">
-                  <div class="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-slate-100 ring-1 ring-slate-200/80">
+                <div class="flex gap-3 sm:gap-3.5">
+                  <div
+                    class="relative h-[4.25rem] w-[4.25rem] shrink-0 overflow-hidden rounded-lg bg-slate-100 ring-1 ring-slate-200/80 transition duration-200 group-hover:ring-slate-300/80"
+                  >
                     <img
                       :src="resolveJobBanner(item)"
                       alt=""
+                      width="68"
+                      height="68"
                       class="h-full w-full object-cover"
                       loading="lazy"
                       decoding="async"
@@ -567,11 +681,21 @@ onUnmounted(() => {
                     />
                   </div>
                   <div class="min-w-0 flex-1">
-                    <h3 class="line-clamp-2 text-[15px] font-bold leading-snug text-navy-800">
+                    <h3 class="line-clamp-2 text-[0.9375rem] font-semibold leading-snug tracking-tight text-slate-900 sm:text-base">
                       {{ item.title }}
                     </h3>
-                    <p class="mt-1 text-xs font-medium text-slate-600">{{ item.nickname || '匿名发布' }}</p>
+                    <div class="mt-1 flex items-center gap-2">
+                      <UserAvatar
+                        v-if="item.user_id"
+                        :custom-avatar-url="publisherAvatarUrlFromJob(item)"
+                        :seed-user-id="String(item.user_id)"
+                        size-class="h-7 w-7 shrink-0"
+                        ring-class="ring-1 ring-slate-200/90"
+                      />
+                      <p class="text-xs font-medium text-slate-500">{{ item.nickname || '匿名发布' }}</p>
+                    </div>
                     <ul class="mt-2 space-y-0.5 text-[11px] leading-relaxed text-slate-500">
+                      <li>· {{ workArrangementLabel(item.work_arrangement) }}</li>
                       <li v-if="item.price">· {{ item.price }}</li>
                       <li v-if="item.work_time">· {{ item.work_time }}</li>
                       <li>· {{ item.address || '地点待定' }}</li>
@@ -582,41 +706,62 @@ onUnmounted(() => {
                   </div>
                   <div class="flex shrink-0 flex-col items-end justify-between">
                     <span
-                      class="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+                      class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                       :class="
                         item.job_category?.name
-                          ? 'bg-fuchsia-100 text-fuchsia-800'
-                          : 'bg-slate-100 text-slate-600'
+                          ? 'bg-slate-100 text-slate-700 ring-1 ring-slate-200/80'
+                          : 'bg-slate-50 text-slate-500 ring-1 ring-slate-200/60'
                       "
                       >{{ item.job_category?.name || '未分类' }}</span
                     >
                     <span class="text-[10px] text-slate-400">{{ formatRelative(item.created_at) }}</span>
                   </div>
                 </div>
-                <div class="mt-3 flex items-center justify-between border-t border-slate-100 pt-2">
-                  <span class="text-[10px] text-slate-400">{{ isDesktop ? '预览右侧' : '进入详情' }}</span>
-                  <button
-                    v-if="isMine(item.user_id)"
-                    type="button"
-                    class="text-[10px] font-semibold text-red-600 hover:underline"
-                    @click.stop.prevent="delJob(item.id)"
-                  >
-                    删除
-                  </button>
+                <div class="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2.5">
+                  <span class="text-[10px] font-medium text-slate-400">{{ isDesktop ? '右侧预览' : '查看详情' }}</span>
+                  <template v-if="isMine(item.user_id)">
+                    <RouterLink
+                      :to="`/edit-job/${item.id}`"
+                      class="text-[10px] font-semibold text-brand-600/90 transition hover:text-brand-700 hover:underline"
+                      @click.stop
+                    >
+                      编辑
+                    </RouterLink>
+                    <button
+                      type="button"
+                      class="text-[10px] font-semibold text-red-600/90 transition hover:text-red-700 hover:underline"
+                      @click.stop.prevent="delJob(item.id)"
+                    >
+                      删除
+                    </button>
+                  </template>
                 </div>
               </button>
             </template>
+            <div ref="loadMoreSentinel" class="h-2 w-full shrink-0" aria-hidden="true" />
+            <p v-if="loadingMore" class="py-3 text-center text-xs text-slate-500">加载更多…</p>
+            <button
+              v-else-if="hasMore && !loading && jobList.length > 0"
+              type="button"
+              class="w-full rounded-[var(--app-radius)] border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-700 shadow-sm transition duration-200 hover:border-slate-300 hover:bg-slate-50"
+              @click="loadMoreJobs"
+            >
+              加载更多
+            </button>
+            <p v-else-if="!hasMore && jobList.length > 0 && !loading" class="py-3 text-center text-[11px] text-slate-400">
+              已加载全部岗位
+            </p>
           </div>
         </aside>
 
         <!-- 右侧详情（仅宽屏） -->
-        <section class="relative hidden min-h-[420px] flex-1 flex-col bg-panel lg:flex">
+        <section class="relative hidden min-h-[420px] flex-1 flex-col bg-slate-50/50 lg:flex">
           <template v-if="!selectedJobId || (!detailLoading && !detailInfo)">
             <div class="flex flex-1 flex-col items-center justify-center p-10 text-center">
               <div
-                class="flex h-28 w-28 items-center justify-center rounded-full bg-gradient-to-br from-accent-200 to-accent-500 shadow-inner"
+                class="flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-200 to-slate-300 shadow-inner ring-1 ring-slate-400/20"
               >
-                <svg class="h-14 w-14 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="h-11 w-11 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -625,8 +770,10 @@ onUnmounted(() => {
                   />
                 </svg>
               </div>
-              <p class="mt-8 text-lg font-bold text-navy-900">← 选择一份工作</p>
-              <p class="mt-2 max-w-sm text-sm text-slate-600">在左侧列表中点击任意岗位，此处将展示完整说明与招聘方联系方式。</p>
+              <p class="mt-6 text-lg font-semibold text-slate-800">选择左侧职位</p>
+              <p class="mt-2 max-w-sm text-sm leading-relaxed text-slate-500">
+                点击任意岗位后，将在此处展示完整说明与招聘方联系方式。
+              </p>
             </div>
           </template>
 
@@ -641,15 +788,17 @@ onUnmounted(() => {
               <img
                 :src="detailBannerUrl"
                 alt=""
+                width="1200"
+                height="480"
                 class="absolute inset-0 h-full w-full object-cover"
-                loading="eager"
+                loading="lazy"
                 decoding="async"
               />
               <div class="absolute inset-0 bg-gradient-to-t from-navy-950 via-navy-950/55 to-navy-900/20" />
               <div class="absolute inset-0 opacity-25 bg-grid-slate bg-[length:20px_20px]" />
               <div class="relative flex h-full flex-col justify-end p-6 sm:p-8">
-                <p class="text-xs font-bold uppercase tracking-widest text-accent-200">#JoinCampus</p>
-                <h2 class="mt-1 line-clamp-2 text-xl font-bold text-white drop-shadow sm:text-2xl">
+                <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-200">校兼</p>
+                <h2 class="mt-1 line-clamp-2 text-xl font-bold tracking-tight text-white drop-shadow-sm sm:text-2xl">
                   {{ detailInfo.title }}
                 </h2>
               </div>
@@ -657,17 +806,33 @@ onUnmounted(() => {
 
             <div class="space-y-6 p-6 sm:p-8">
               <div class="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p class="text-sm font-semibold text-navy-800">
-                    {{ detailInfo.nickname }}
-                    <span class="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">已认证展示</span>
-                  </p>
-                  <RouterLink
-                    :to="`/detail/${detailInfo.id}`"
-                    class="mt-1 inline-block text-xs font-semibold text-accent-600 underline-offset-2 hover:underline"
-                  >
-                    打开独立详情页（分享链接）
-                  </RouterLink>
+                <div class="flex min-w-0 items-start gap-3">
+                  <UserAvatar
+                    v-if="detailInfo.user_id"
+                    :custom-avatar-url="publisherAvatarUrlFromJob(detailInfo)"
+                    :seed-user-id="String(detailInfo.user_id)"
+                    size-class="h-11 w-11 shrink-0"
+                    ring-class="ring-2 ring-slate-200/80"
+                  />
+                  <div class="min-w-0">
+                    <p class="text-sm font-semibold text-navy-800">
+                      {{ detailInfo.nickname }}
+                      <span class="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">已认证展示</span>
+                    </p>
+                    <RouterLink
+                      :to="`/detail/${detailInfo.id}`"
+                      class="mt-1 inline-block text-xs font-semibold text-brand-600 underline-offset-2 transition hover:text-brand-700 hover:underline"
+                    >
+                      打开独立详情页
+                    </RouterLink>
+                    <RouterLink
+                      v-if="isMine(detailInfo.user_id)"
+                      :to="`/edit-job/${detailInfo.id}`"
+                      class="mt-1 ml-2 inline-block text-xs font-semibold text-slate-600 underline-offset-2 transition hover:text-slate-800 hover:underline"
+                    >
+                      编辑职位
+                    </RouterLink>
+                  </div>
                 </div>
                 <p class="text-xs text-slate-400">发布于 {{ formatRelative(detailInfo.created_at) }}</p>
               </div>
@@ -737,6 +902,14 @@ onUnmounted(() => {
                     <p class="text-sm font-medium text-navy-900">{{ detailInfo.price || '面议' }}</p>
                   </div>
                 </div>
+                <div class="flex gap-3 rounded-xl border border-slate-200/90 bg-white p-4 shadow-sm sm:col-span-2">
+                  <div class="min-w-0 flex-1">
+                    <p class="text-[11px] font-semibold uppercase text-slate-400">工作形式</p>
+                    <p class="mt-1 text-sm font-medium text-navy-900">
+                      {{ workArrangementLabel(detailInfo.work_arrangement) }}
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm">
@@ -751,7 +924,7 @@ onUnmounted(() => {
                 <a
                   v-if="detailInfo.phone"
                   :href="telHref(detailInfo.phone)"
-                  class="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-accent-500 py-3.5 text-sm font-bold text-white shadow-lg transition hover:bg-accent-600"
+                  class="mt-4 flex w-full items-center justify-center gap-2 rounded-[var(--app-radius)] bg-brand-600 py-3.5 text-sm font-semibold text-white shadow-md transition duration-200 hover:bg-brand-500"
                 >
                   拨打电话
                 </a>
@@ -770,23 +943,33 @@ onUnmounted(() => {
       </div>
 
       <AppEmptyState
-        v-if="!loading && !displayJobs.length"
+        v-if="!loading && !jobList.length"
         class="mt-8"
         title="暂无岗位"
-        description="调整分类、关键词、地点或筛选条件后再试；招聘方可发布新岗位。"
+        description="当前暂无在招岗位；招聘方可发布新岗位，或稍后再试。"
       >
         <template #actions>
-          <button type="button" class="rounded-xl bg-navy-900 px-5 py-2.5 text-sm font-semibold text-white" @click="clearFilters">
-            重置条件
+          <button
+            type="button"
+            class="rounded-[var(--app-radius)] bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition duration-200 hover:bg-slate-800"
+            @click="clearFilters"
+          >
+            刷新列表
           </button>
-          <button type="button" class="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold" @click="goPublish">
+          <button
+            type="button"
+            class="rounded-[var(--app-radius)] border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition duration-200 hover:border-slate-300 hover:bg-slate-50"
+            @click="goPublish"
+          >
             {{ canPublish ? '发布职位' : '招聘方入驻' }}
           </button>
         </template>
       </AppEmptyState>
 
-      <section class="mt-8 rounded-2xl border border-slate-200/90 bg-white p-5 text-sm text-slate-600 shadow-sm sm:p-6">
-        <h3 class="font-bold text-navy-900">投递提示</h3>
+      <section
+        class="mt-8 rounded-[var(--app-radius-xl)] border border-slate-200/90 bg-white p-5 text-sm leading-relaxed text-slate-600 shadow-sm sm:p-6"
+      >
+        <h3 class="text-sm font-semibold text-slate-900">投递提示</h3>
         <p class="mt-2 leading-relaxed">
           核对课表与通勤；保存岗位截图；薪资与工时尽量书面确认。手机端点左侧卡片将打开独立详情页，功能与右侧预览一致。
         </p>

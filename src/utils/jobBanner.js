@@ -1,6 +1,6 @@
 /**
  * 职位封面图：优先使用库表字段 cover_image / banner_url（https），否则按 id 轮换高质量占位图。
- * 在 Supabase 为 part_time 增加可空的 text 列 cover_image 后，发布页填写的链接会在此生效。
+ * 在 Supabase 为 jobs 增加可空的 text 列 cover_image 后，发布页填写的链接会在此生效。
  */
 const CURATED_BANNERS = [
   'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=1400&q=80',

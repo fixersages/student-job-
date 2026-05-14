@@ -25,11 +25,10 @@
               >
             </li>
             <li>
-              <router-link
-                to="/register"
-                class="text-slate-600 transition hover:text-brand-600"
-                >学生注册</router-link
-              >
+              <router-link to="/profile" class="text-slate-600 transition hover:text-brand-600">个人中心</router-link>
+            </li>
+            <li>
+              <router-link to="/register" class="text-slate-600 transition hover:text-brand-600">学生注册</router-link>
             </li>
           </ul>
         </div>

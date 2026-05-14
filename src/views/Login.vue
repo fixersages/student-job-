@@ -1,9 +1,11 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute, RouterLink } from 'vue-router'
-import { signIn, resendSignupEmail } from '@/lib/supabase'
+import { signIn, resendSignupEmail, supabase } from '@/lib/supabase'
 import { describeAuthError } from '@/lib/authErrors'
+import { syncCampusPublicProfileFromUser } from '@/api/publicProfile'
 import AuthLayout from '@/components/AuthLayout.vue'
+import OAuthProviderButtons from '@/components/OAuthProviderButtons.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -13,6 +15,17 @@ const loading = ref(false)
 const loginError = ref('')
 const resendLoading = ref(false)
 const resendHint = ref('')
+
+function prepareOAuthRedirect() {
+  const r = redirectAfterLogin.value
+  if (r) sessionStorage.setItem('campus_oauth_redirect', r)
+  else sessionStorage.removeItem('campus_oauth_redirect')
+}
+
+function onOAuthError(msg) {
+  loginError.value = msg
+  resendHint.value = ''
+}
 
 const redirectAfterLogin = computed(() => {
   const r = route.query.redirect
@@ -35,7 +48,22 @@ const doLogin = async () => {
   loading.value = false
   if (error) {
     loginError.value = describeAuthError(error)
+    if (import.meta.env.DEV) {
+      const u = import.meta.env.VITE_SUPABASE_URL
+      console.error('[login] auth error:', error, '\n当前 VITE_SUPABASE_URL 前缀:', u ? String(u).slice(0, 56) : '(未读取到)')
+    }
     return
+  }
+  try {
+    const {
+      data: { user: u },
+    } = await supabase.auth.getUser()
+    if (u?.id) {
+      const { error: syncErr } = await syncCampusPublicProfileFromUser(u)
+      if (syncErr) console.warn('[login] syncCampusPublicProfileFromUser', syncErr)
+    }
+  } catch (e) {
+    console.warn('[login] post-login sync', e)
   }
   if (redirectAfterLogin.value) {
     router.replace(redirectAfterLogin.value)
@@ -55,7 +83,7 @@ async function resendVerification() {
   const { error } = await resendSignupEmail(e)
   resendLoading.value = false
   if (error) {
-    resendHint.value = error.message || '发送失败，请稍后再试。'
+    resendHint.value = describeAuthError(error)
   } else {
     resendHint.value = '验证邮件已重新发送，请到邮箱（含垃圾箱）查收。'
   }
@@ -65,15 +93,17 @@ async function resendVerification() {
 <template>
   <AuthLayout
     headline="欢迎回到校兼"
-    subline="学生账号用于浏览职位、联系雇主；招聘方账号用于发布与管理岗位。若项目开启了邮箱验证，注册后需先点击邮件里的链接再登录。"
+    subline="学生账号用于浏览职位、联系雇主；招聘方账号用于发布与管理岗位。可使用邮箱密码或下方 Google / GitHub；首次第三方登录默认为学生。若开启邮箱验证，邮箱注册后需先点击邮件里的链接再登录。"
   >
-    <div class="app-card p-6 shadow-card sm:p-8">
-      <h1 class="text-xl font-bold text-slate-900">登录账号</h1>
-      <p class="mt-1 text-sm text-slate-500">使用注册邮箱与密码登录，系统将自动识别学生或招聘方权限</p>
+    <div class="app-card overflow-hidden p-6 shadow-card ring-1 ring-slate-900/[0.03] sm:p-8">
+      <h1 class="text-balance text-xl font-bold tracking-tight text-slate-900">登录账号</h1>
+      <p class="mt-2 text-sm leading-relaxed text-slate-600">
+        使用注册邮箱与密码登录，系统将自动识别学生或招聘方权限
+      </p>
 
       <div
         v-if="loginError"
-        class="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-950"
+        class="mt-6 rounded-[var(--app-radius-lg)] border border-amber-200/90 bg-amber-50/95 px-4 py-3 text-sm leading-relaxed text-amber-950 shadow-sm"
         role="alert"
       >
         {{ loginError }}
@@ -102,24 +132,42 @@ async function resendVerification() {
             placeholder="••••••••"
           />
         </div>
-        <button
-          type="submit"
-          :disabled="loading"
-          class="w-full rounded-xl bg-brand-600 py-3.5 text-sm font-semibold text-white shadow-lg shadow-brand-600/25 transition hover:bg-brand-700 disabled:opacity-60"
-        >
+        <button type="submit" :disabled="loading" class="app-btn-primary w-full py-3.5 disabled:opacity-55">
           {{ loading ? '登录中…' : '登录' }}
         </button>
       </form>
 
-      <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs leading-relaxed text-slate-600">
+      <div class="relative my-8">
+        <div class="absolute inset-0 flex items-center" aria-hidden="true">
+          <div class="w-full border-t border-slate-200" />
+        </div>
+        <div class="relative flex justify-center text-xs font-medium">
+          <span class="bg-white px-3 text-slate-500">或使用以下方式登录</span>
+        </div>
+      </div>
+      <OAuthProviderButtons :before-redirect="prepareOAuthRedirect" @error="onOAuthError" />
+      <p class="mt-3 text-center text-xs leading-relaxed text-slate-500">
+        首次使用 Google / GitHub 将创建账号并默认为<strong class="font-medium text-slate-700">学生</strong>；需要发布职位请用邮箱注册<strong class="font-medium text-slate-700">招聘方</strong>账号。
+      </p>
+
+      <div
+        class="mt-5 rounded-[var(--app-radius-lg)] border border-slate-200/90 bg-slate-50/90 px-4 py-3 text-xs leading-relaxed text-slate-600 ring-1 ring-slate-900/[0.02]"
+      >
         <p class="font-medium text-slate-800">收不到邮件或一直登录失败？</p>
         <ul class="mt-2 list-inside list-disc space-y-1">
-          <li>在 Supabase 控制台：<strong>Authentication → Providers → Email</strong>，可暂时关闭「Confirm email」便于本地调试。</li>
-          <li>QQ 邮箱请检查「垃圾箱」与「订阅邮件」。</li>
+          <li>
+            <strong>邮箱验证</strong>：若注册后提示需验证，请到邮箱中打开我们发送的邮件，点击其中的「确认邮箱」或验证链接，完成后再用本页邮箱与密码登录。
+          </li>
+          <li>
+            <strong>漏收邮件</strong>：在收件箱、垃圾箱、订阅/推广或「其他」分类中查找；QQ、Outlook 等常见邮箱可能自动归类，并确认邮箱未爆满。
+          </li>
+          <li>
+            <strong>密码与账号</strong>：核对邮箱是否拼写正确；输入密码时注意大小写与输入法中英文状态。
+          </li>
         </ul>
         <button
           type="button"
-          class="mt-3 text-xs font-semibold text-brand-600 underline decoration-brand-400/60 underline-offset-2 hover:text-brand-800 disabled:opacity-50"
+          class="mt-3 text-xs font-semibold text-brand-600 underline decoration-brand-300/80 underline-offset-2 transition duration-200 hover:text-brand-800 disabled:opacity-50"
           :disabled="resendLoading"
           @click="resendVerification"
         >
@@ -130,11 +178,15 @@ async function resendVerification() {
 
       <p class="mt-8 text-center text-sm text-slate-600">
         还没有账号？
-        <RouterLink to="/register" class="font-semibold text-brand-600 hover:text-brand-800">学生注册</RouterLink>
-        <span class="mx-1 text-slate-400">·</span>
+        <RouterLink
+          to="/register"
+          class="font-semibold text-brand-600 transition duration-200 hover:text-brand-800"
+          >学生注册</RouterLink
+        >
+        <span class="mx-1.5 text-slate-300">·</span>
         <RouterLink
           to="/register?role=publisher"
-          class="font-semibold text-brand-600 hover:text-brand-800"
+          class="font-semibold text-brand-600 transition duration-200 hover:text-brand-800"
           >招聘方注册</RouterLink
         >
       </p>

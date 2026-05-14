@@ -5,13 +5,21 @@
 @layer base {
   :root {
     color-scheme: light;
-    --app-radius: 1rem;
-    --app-radius-lg: 1.25rem;
-    --app-ring: rgb(37 99 235 / 0.25);
+    --app-radius: 0.75rem;
+    --app-radius-lg: 1rem;
+    --app-radius-xl: 1.25rem;
+    --app-ring: rgb(37 99 235 / 0.22);
   }
 
   html {
     @apply antialiased text-slate-900 scroll-smooth;
+    font-size: 15px;
+  }
+
+  @media (min-width: 640px) {
+    html {
+      font-size: 16px;
+    }
   }
 
   body {
@@ -24,7 +32,7 @@
   }
 
   :focus-visible {
-    @apply outline-none ring-2 ring-brand-500/40 ring-offset-2 ring-offset-slate-50;
+    @apply outline-none ring-2 ring-brand-500/35 ring-offset-2 ring-offset-slate-50;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -40,28 +48,64 @@
   }
 
   .app-card {
-    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card transition-shadow duration-200;
+    @apply rounded-[var(--app-radius-xl)] border border-slate-200/90 bg-white shadow-card transition-shadow duration-300 ease-out;
   }
 
   .app-card-interactive {
-    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card transition-all duration-200;
-    @apply hover:-translate-y-0.5 hover:border-brand-200/70 hover:shadow-card-hover;
+    @apply rounded-[var(--app-radius-xl)] border border-slate-200/90 bg-white shadow-card transition-all duration-300 ease-out;
+    @apply hover:-translate-y-px hover:border-slate-300/90 hover:shadow-card-hover;
   }
 
   .app-input {
-    @apply w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm outline-none transition-colors duration-200;
+    @apply w-full rounded-[var(--app-radius)] border border-slate-200 bg-white px-4 py-3 text-[0.9375rem] leading-snug text-slate-900 shadow-sm outline-none transition-all duration-200;
     @apply placeholder:text-slate-400;
-    @apply hover:border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/15;
+    @apply hover:border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20;
   }
 
   .app-btn-primary {
-    @apply inline-flex items-center justify-center rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-brand-600/20;
-    @apply transition hover:bg-brand-700 active:scale-[0.99];
+    @apply inline-flex items-center justify-center rounded-[var(--app-radius)] bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-brand-600/15;
+    @apply transition duration-200 ease-out hover:bg-brand-700 hover:shadow-lg hover:shadow-brand-600/20 active:scale-[0.99];
   }
 
   .app-btn-secondary {
-    @apply inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm;
-    @apply transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.99];
+    @apply inline-flex items-center justify-center rounded-[var(--app-radius)] border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm;
+    @apply transition duration-200 ease-out hover:border-slate-300 hover:bg-slate-50 active:scale-[0.99];
+  }
+
+  /** 深色顶栏内的搜索框（高对比、易读） */
+  .app-hero-field {
+    @apply min-h-[2.875rem] w-full rounded-[var(--app-radius)] border border-white/10 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 transition duration-200;
+    @apply placeholder:text-slate-400;
+    @apply hover:border-white/20 hover:bg-white focus:border-brand-400/80 focus:ring-2 focus:ring-brand-400/25;
+  }
+
+  /** 顶栏筛选胶囊：未选中 */
+  .app-hero-chip {
+    @apply shrink-0 rounded-full border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-medium text-white/85 transition duration-200;
+    @apply hover:border-white/25 hover:bg-white/10;
+  }
+
+  /** 顶栏筛选胶囊：选中 */
+  .app-hero-chip-active {
+    @apply border-brand-400/90 bg-brand-500 text-white shadow-md shadow-brand-900/20;
+  }
+
+  /** 职位列表卡片（大厅） */
+  .app-job-row {
+    @apply w-full rounded-[var(--app-radius-lg)] border border-slate-200/90 bg-white p-3.5 text-left shadow-sm transition duration-200 ease-out sm:p-4;
+    @apply hover:border-slate-300 hover:shadow-md;
+  }
+
+  .app-job-row-selected {
+    @apply border-brand-500/50 bg-brand-50/40 shadow-card-active ring-1 ring-brand-500/25;
+  }
+
+  .app-section-kicker {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500;
+  }
+
+  .app-form-section-head {
+    @apply border-b border-slate-100 bg-slate-50/95 px-5 py-3.5 sm:px-8;
   }
 }
 

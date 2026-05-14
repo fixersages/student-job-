@@ -69,11 +69,13 @@ export default {
         '4xl': '2rem',
       },
       boxShadow: {
-        card: '0 1px 2px 0 rgb(0 0 0 / 0.04), 0 8px 24px -4px rgb(15 23 42 / 0.08)',
+        card: '0 1px 3px 0 rgb(15 23 42 / 0.06), 0 4px 20px -4px rgb(15 23 42 / 0.08)',
         'card-hover':
-          '0 4px 6px -1px rgb(0 0 0 / 0.06), 0 16px 32px -8px rgb(0 45 91 / 0.12)',
-        nav: '0 1px 0 0 rgb(0 26 56 / 0.15)',
-        'card-active': '0 0 0 3px rgb(37 99 235 / 0.35), 0 8px 24px -4px rgb(0 45 91 / 0.12)',
+          '0 4px 12px -2px rgb(15 23 42 / 0.08), 0 12px 28px -8px rgb(15 23 42 / 0.12)',
+        nav: '0 1px 0 0 rgb(15 23 42 / 0.08)',
+        'card-active':
+          '0 0 0 2px rgb(37 99 235 / 0.35), 0 4px 16px -4px rgb(15 23 42 / 0.1)',
+        soft: '0 2px 8px -2px rgb(15 23 42 / 0.06)',
       },
       backgroundImage: {
         'grid-slate': `

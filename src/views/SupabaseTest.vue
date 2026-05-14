@@ -7,11 +7,11 @@ const running = ref(false)
 const testConn = async () => {
   running.value = true
   try {
-    const { data, error } = await supabase.from('part_time').select('*').limit(1)
+    const { data, error } = await supabase.from('jobs').select('id').limit(1)
 
     if (error) {
       console.error(error)
-      alert('连接失败：请检查 .env、密钥与表名（part_time）及 RLS 策略')
+      alert('连接失败：请检查 .env、密钥与表名（jobs）及 RLS 策略')
     } else {
       console.log(data)
       alert('数据库可读：Vue + Supabase 连通正常')
@@ -28,7 +28,7 @@ const testConn = async () => {
       <p class="text-xs font-semibold uppercase tracking-wider text-brand-600">开发者</p>
       <h1 class="mt-2 text-2xl font-bold tracking-tight text-slate-900">数据连接自检</h1>
       <p class="mt-3 text-sm leading-relaxed text-slate-600">
-        请求 <code class="rounded-lg bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-800">part_time</code>
+        请求 <code class="rounded-lg bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-800">jobs</code>
         表一行数据，用于确认环境变量与 RLS 是否允许当前身份读取。
       </p>
       <button

@@ -1,14 +1,16 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, computed } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRouter, useRoute, RouterLink } from 'vue-router'
-import { supabase, signOut, isPublisher } from '@/lib/supabase'
+import { isPublisher } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/auth'
+import UserAvatar from '@/components/UserAvatar.vue'
 
 const router = useRouter()
 const route = useRoute()
-const user = ref(null)
+const authStore = useAuthStore()
+const { user, ready } = storeToRefs(authStore)
 const mobileOpen = ref(false)
-
-let authSubscription = null
 
 const displayName = computed(() => {
   const u = user.value
@@ -26,41 +28,20 @@ const roleLabel = computed(() => {
 const navClass = (path) => {
   const active = route.path === path || (path !== '/' && route.path.startsWith(path))
   return active
-    ? 'border-b-2 border-accent-400 pb-3 text-sm font-semibold text-white'
-    : 'border-b-2 border-transparent pb-3 text-sm font-medium text-white/70 transition hover:text-white'
-}
-
-const getUser = async () => {
-  const {
-    data: { user: u },
-  } = await supabase.auth.getUser()
-  user.value = u
+    ? 'border-b-2 border-brand-400 pb-3 text-sm font-semibold text-white'
+    : 'border-b-2 border-transparent pb-3 text-sm font-medium text-white/75 transition duration-200 hover:text-white'
 }
 
 const logout = async () => {
-  await signOut()
-  user.value = null
+  await authStore.signOutUser()
   mobileOpen.value = false
   router.push('/login')
 }
-
-onMounted(() => {
-  getUser()
-  const { data } = supabase.auth.onAuthStateChange(() => {
-    getUser()
-  })
-  authSubscription = data.subscription
-})
-
-onUnmounted(() => {
-  authSubscription?.unsubscribe()
-  authSubscription = null
-})
 </script>
 
 <template>
   <header
-    class="sticky top-0 z-50 border-b border-navy-800 bg-navy-900 text-white shadow-nav backdrop-blur-md"
+    class="sticky top-0 z-50 border-b border-slate-900/20 bg-slate-950 text-white shadow-nav backdrop-blur-md supports-[backdrop-filter]:bg-slate-950/92"
   >
     <div
       class="mx-auto flex min-h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:min-h-[3.25rem] sm:gap-4 sm:px-6 lg:px-8"
@@ -71,19 +52,32 @@ onUnmounted(() => {
         @click="mobileOpen = false"
       >
         <span
-          class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-accent-500 to-accent-700 text-sm font-bold text-white shadow-lg shadow-accent-600/30"
+          class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-sm font-bold text-white shadow-md shadow-brand-900/30 ring-1 ring-white/10"
           >校</span
         >
         <div class="leading-tight">
           <span class="block text-base font-bold tracking-tight text-white sm:text-lg">校兼</span>
-          <span class="hidden text-[11px] font-medium text-sky-200/90 sm:block">JobsDB 风格 · 校园兼职</span>
+          <span class="hidden text-[11px] font-medium text-slate-400 sm:block">校园兼职 · 合规招聘</span>
         </div>
       </RouterLink>
 
-      <nav class="hidden h-[3.25rem] items-end gap-6 md:flex">
-        <RouterLink to="/list" :class="navClass('/list')"> 职位搜索 </RouterLink>
+      <nav class="hidden h-[3.25rem] items-end gap-5 md:flex lg:gap-6">
+        <RouterLink to="/list" :class="navClass('/list')"> 职位大厅 </RouterLink>
         <RouterLink
-          v-if="!user || isPublisherUser"
+          v-if="ready && user"
+          to="/chat"
+          :class="navClass('/chat')"
+        >
+          我的聊天
+        </RouterLink>
+        <RouterLink to="/profile" :class="navClass('/profile')"> 个人中心 </RouterLink>
+        <template v-if="!ready">
+          <span class="inline-block min-w-[5.5rem] border-b-2 border-transparent pb-3 select-none" aria-hidden="true"
+            >&nbsp;</span
+          >
+        </template>
+        <RouterLink
+          v-else-if="!user || isPublisherUser"
           to="/publish"
           :class="navClass('/publish')"
         >
@@ -99,19 +93,23 @@ onUnmounted(() => {
       </nav>
 
       <div class="hidden items-center gap-2 md:flex md:gap-3">
-        <template v-if="user">
+        <template v-if="!ready">
+          <span class="h-9 w-24 animate-pulse rounded-md bg-white/10" aria-hidden="true" />
+        </template>
+        <template v-else-if="user">
+          <UserAvatar :user="user" size-class="h-9 w-9" ring-class="ring-2 ring-white/25" />
           <span
-            class="hidden max-w-[120px] truncate rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/90 lg:inline-block lg:max-w-[140px]"
+            class="hidden max-w-[120px] truncate rounded-md bg-white/5 px-2.5 py-1 text-xs font-medium text-slate-200 ring-1 ring-white/10 lg:inline-block lg:max-w-[140px]"
             >{{ displayName }}</span
           >
           <span
-            class="rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-wide"
-            :class="isPublisherUser ? 'bg-violet-400/25 text-violet-100' : 'bg-emerald-400/20 text-emerald-100'"
+            class="rounded-md px-2.5 py-1 text-[11px] font-semibold tracking-wide ring-1 ring-white/10"
+            :class="isPublisherUser ? 'bg-violet-500/15 text-violet-200' : 'bg-emerald-500/15 text-emerald-200'"
             >{{ roleLabel }}</span
           >
           <button
             type="button"
-            class="rounded-lg border border-white/25 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/15"
+            class="rounded-md border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition duration-200 hover:bg-white/10"
             @click="logout"
           >
             退出
@@ -120,13 +118,13 @@ onUnmounted(() => {
         <template v-else>
           <RouterLink
             to="/login"
-            class="rounded-lg border border-white/40 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+            class="rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-white transition duration-200 hover:bg-white/10"
           >
             登入
           </RouterLink>
           <RouterLink
             to="/register"
-            class="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-accent-600/30 transition hover:bg-accent-600"
+            class="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-black/20 transition duration-200 hover:bg-brand-500"
           >
             免费注册
           </RouterLink>
@@ -135,7 +133,7 @@ onUnmounted(() => {
 
       <button
         type="button"
-        class="inline-flex items-center justify-center rounded-lg border border-white/20 bg-white/5 p-2 text-white transition hover:bg-white/10 md:hidden"
+        class="inline-flex items-center justify-center rounded-md border border-white/15 bg-white/5 p-2 text-white transition duration-200 hover:bg-white/10 md:hidden"
         aria-label="打开菜单"
         :aria-expanded="mobileOpen"
         @click="mobileOpen = !mobileOpen"
@@ -169,20 +167,40 @@ onUnmounted(() => {
     >
       <div
         v-show="mobileOpen"
-        class="border-t border-white/10 bg-navy-950 px-4 py-4 shadow-inner md:hidden"
+        class="border-t border-white/10 bg-slate-950/98 px-4 py-4 shadow-inner md:hidden"
       >
         <nav class="flex flex-col gap-1">
           <RouterLink
             to="/list"
-            class="rounded-xl px-3 py-2.5 text-sm font-medium text-white/90 transition hover:bg-white/10"
+            class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-100 transition duration-200 hover:bg-white/10"
             @click="mobileOpen = false"
           >
-            职位搜索
+            职位大厅
           </RouterLink>
           <RouterLink
-            v-if="!user || isPublisherUser"
+            v-if="ready && user"
+            to="/chat"
+            class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-100 transition duration-200 hover:bg-white/10"
+            @click="mobileOpen = false"
+          >
+            我的聊天
+          </RouterLink>
+          <RouterLink
+            to="/profile"
+            class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-100 transition duration-200 hover:bg-white/10"
+            @click="mobileOpen = false"
+          >
+            个人中心
+          </RouterLink>
+          <template v-if="!ready">
+            <div class="rounded-lg px-3 py-2.5">
+              <span class="block h-5 animate-pulse rounded bg-white/10" aria-hidden="true" />
+            </div>
+          </template>
+          <RouterLink
+            v-else-if="!user || isPublisherUser"
             to="/publish"
-            class="rounded-xl px-3 py-2.5 text-sm font-medium text-white/90 transition hover:bg-white/10"
+            class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-100 transition duration-200 hover:bg-white/10"
             @click="mobileOpen = false"
           >
             发布职位
@@ -190,13 +208,21 @@ onUnmounted(() => {
           <RouterLink
             v-else
             to="/register?role=publisher"
-            class="rounded-xl px-3 py-2.5 text-sm font-medium text-white/90 transition hover:bg-white/10"
+            class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-100 transition duration-200 hover:bg-white/10"
             @click="mobileOpen = false"
           >
             招聘方入驻
           </RouterLink>
-          <template v-if="user">
-            <span class="px-3 py-2 text-xs text-white/60">当前：{{ displayName }}（{{ roleLabel }}）</span>
+          <template v-if="!ready">
+            <div class="px-3 py-2">
+              <span class="block h-10 animate-pulse rounded-lg bg-white/10" aria-hidden="true" />
+            </div>
+          </template>
+          <template v-else-if="user">
+            <div class="flex items-center gap-2.5 px-3 py-2">
+              <UserAvatar :user="user" size-class="h-10 w-10" ring-class="ring-2 ring-white/25" />
+              <span class="text-xs text-white/80">当前：{{ displayName }}（{{ roleLabel }}）</span>
+            </div>
             <button
               type="button"
               class="rounded-xl px-3 py-2.5 text-left text-sm font-medium text-rose-300 transition hover:bg-white/5"
@@ -205,16 +231,16 @@ onUnmounted(() => {
               退出登录
             </button>
           </template>
-          <template v-else>
+          <template v-else-if="ready">
             <RouterLink
               to="/login"
-              class="rounded-xl px-3 py-2.5 text-sm text-white/90 transition hover:bg-white/10"
+              class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-100 transition duration-200 hover:bg-white/10"
               @click="mobileOpen = false"
               >登入</RouterLink
             >
             <RouterLink
               to="/register"
-              class="mt-1 rounded-xl bg-accent-500 py-2.5 text-center text-sm font-semibold text-white shadow-sm transition hover:bg-accent-600"
+              class="mt-1 rounded-lg bg-brand-600 py-2.5 text-center text-sm font-semibold text-white shadow-md transition duration-200 hover:bg-brand-500"
               @click="mobileOpen = false"
             >
               免费注册
